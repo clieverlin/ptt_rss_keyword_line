@@ -89,33 +89,41 @@ def fetch_feed(use_mock=False):
         print("💡 正在使用本地偽裝資料 (Mock Mode) 執行測試。")
         return MOCK_XML
 
-    rss_url = 'https://www.ptt.cc/atom/gamesale.xml'
+    rss_base_url = 'https://www.ptt.cc/atom/gamesale.xml'
+    
+    # 先將 exclusion parameter 加入到 PTT URL，再進行 URL 編碼阻絕快取 (解決 400 Bad Request)
+    target_url = f"{rss_base_url}?_={int(time.time())}"
     
     # 代理清單定義
     proxies = [
         {
             'name': '直接連線',
-            'url': rss_url,
+            'url': target_url,
+            'parse': lambda data: data
+        },
+        {
+            'name': 'CorsProxy.io 代理',
+            'url': f'https://corsproxy.io/?url={urllib.parse.quote(target_url)}',
             'parse': lambda data: data
         },
         {
             'name': 'CodeTabs 代理',
-            'url': f'https://api.codetabs.com/v1/proxy/?quest={urllib.parse.quote(rss_url)}',
+            'url': f'https://api.codetabs.com/v1/proxy/?quest={urllib.parse.quote(target_url)}',
             'parse': lambda data: data
         },
         {
             'name': 'AllOrigins JSON 代理',
-            'url': f'https://api.allorigins.win/get?url={urllib.parse.quote(rss_url)}',
+            'url': f'https://api.allorigins.win/get?url={urllib.parse.quote(target_url)}',
             'parse': lambda data: json.loads(data).get('contents', '')
         },
         {
             'name': 'AllOrigins Raw 代理',
-            'url': f'https://api.allorigins.win/raw?url={urllib.parse.quote(rss_url)}',
+            'url': f'https://api.allorigins.win/raw?url={urllib.parse.quote(target_url)}',
             'parse': lambda data: data
         },
         {
             'name': 'Corsfix 代理',
-            'url': f'https://proxy.corsfix.com/?{urllib.parse.quote(rss_url)}',
+            'url': f'https://proxy.corsfix.com/?{urllib.parse.quote(target_url)}',
             'parse': lambda data: data
         }
     ]
@@ -125,21 +133,12 @@ def fetch_feed(use_mock=False):
     for proxy in proxies:
         print(f"🔄 嘗試透過 [{proxy['name']}] 獲取 RSS...")
         try:
-            url = proxy['url']
-            # 動態加入快取排除參數，確保每次都更新
-            if 'api.allorigins.win/get' in url:
-                url = f"{url}&_={int(time.time())}"
-            else:
-                if '?' in url:
-                    url = f"{url}&_={int(time.time())}"
-                else:
-                    url = f"{url}?_={int(time.time())}"
-                
             req = urllib.request.Request(
-                url, 
+                proxy['url'], 
                 headers={'User-Agent': user_agent}
             )
-            with urllib.request.urlopen(req, timeout=15) as response:
+            # 增加 timeout 到 25 秒給慢速代理緩衝
+            with urllib.request.urlopen(req, timeout=25) as response:
                 raw_data = response.read().decode('utf-8')
                 parsed_xml = proxy['parse'](raw_data)
                 if parsed_xml and '<feed' in parsed_xml:
