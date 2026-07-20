@@ -3,7 +3,9 @@ import sys
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import xml.etree.ElementTree as ET
+import time
 
 # 設定設定檔路徑
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -82,26 +84,78 @@ def save_seen_posts(seen_list):
         json.dump(seen_list, f, ensure_ascii=False, indent=2)
 
 def fetch_feed(use_mock=False):
-    """抓取 PTT Gamesale RSS XML 內容"""
+    """抓取 PTT Gamesale RSS XML 內容，支援自動代理切換"""
     if use_mock:
         print("💡 正在使用本地偽裝資料 (Mock Mode) 執行測試。")
         return MOCK_XML
 
-    url = 'https://www.ptt.cc/atom/gamesale.xml'
-    req = urllib.request.Request(
-        url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-    )
+    rss_url = 'https://www.ptt.cc/atom/gamesale.xml'
     
-    try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            return response.read().decode('utf-8')
-    except urllib.error.URLError as e:
-        print(f"❌ 無法連線至 PTT RSS 伺服器 ({e.reason})。正在自動切換為 Mock 虛擬資料進行邏輯流程測試！")
+    # 代理清單定義
+    proxies = [
+        {
+            'name': '直接連線',
+            'url': rss_url,
+            'parse': lambda data: data
+        },
+        {
+            'name': 'CodeTabs 代理',
+            'url': f'https://api.codetabs.com/v1/proxy/?quest={urllib.parse.quote(rss_url)}',
+            'parse': lambda data: data
+        },
+        {
+            'name': 'AllOrigins JSON 代理',
+            'url': f'https://api.allorigins.win/get?url={urllib.parse.quote(rss_url)}',
+            'parse': lambda data: json.loads(data).get('contents', '')
+        },
+        {
+            'name': 'AllOrigins Raw 代理',
+            'url': f'https://api.allorigins.win/raw?url={urllib.parse.quote(rss_url)}',
+            'parse': lambda data: data
+        },
+        {
+            'name': 'Corsfix 代理',
+            'url': f'https://proxy.corsfix.com/?{urllib.parse.quote(rss_url)}',
+            'parse': lambda data: data
+        }
+    ]
+
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+    for proxy in proxies:
+        print(f"🔄 嘗試透過 [{proxy['name']}] 獲取 RSS...")
+        try:
+            url = proxy['url']
+            # 動態加入快取排除參數，確保每次都更新
+            if 'api.allorigins.win/get' in url:
+                url = f"{url}&_={int(time.time())}"
+            else:
+                if '?' in url:
+                    url = f"{url}&_={int(time.time())}"
+                else:
+                    url = f"{url}?_={int(time.time())}"
+                
+            req = urllib.request.Request(
+                url, 
+                headers={'User-Agent': user_agent}
+            )
+            with urllib.request.urlopen(req, timeout=15) as response:
+                raw_data = response.read().decode('utf-8')
+                parsed_xml = proxy['parse'](raw_data)
+                if parsed_xml and '<feed' in parsed_xml:
+                    print(f"✅ 成功透過 [{proxy['name']}] 取得 PTT RSS 資料！")
+                    return parsed_xml
+                else:
+                    print(f"⚠️ [{proxy['name']}] 回傳的內容不是有效的 Atom Feed XML。")
+        except Exception as e:
+            print(f"❌ [{proxy['name']}] 失敗: {e}")
+            
+    # 若所有代理皆失敗且處於離線 Mock 測試模式，才回傳 Mock 資料；否則拋出例外讓工作流回報錯誤
+    if use_mock:
+        print("💡 代理皆失敗，已回傳 Mock 虛擬資料。")
         return MOCK_XML
-    except Exception as e:
-        print(f"❌ 抓取 RSS 發生非預期錯誤: {e}。切換至 Mock 虛擬資料！")
-        return MOCK_XML
+    else:
+        raise RuntimeError("❌ 所有連線代理與直連皆失敗，監控任務中止。")
 
 def parse_xml_to_articles(xml_str):
     """解析 Atom XML 為文章列表"""
