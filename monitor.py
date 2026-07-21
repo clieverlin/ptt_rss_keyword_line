@@ -98,6 +98,11 @@ def fetch_feed(use_mock=False):
     # 代理清單定義
     proxies = [
         {
+            'name': '私人 Cloudflare Worker 代理 (首選)',
+            'url': f'https://ptt-proxy.cliever-lin.workers.dev/?_={int(time.time())}',
+            'parse': lambda data: data
+        },
+        {
             'name': '直接連線',
             'url': target_url,
             'parse': lambda data: data
