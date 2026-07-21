@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import xml.etree.ElementTree as ET
 import time
+from datetime import datetime
 
 # 設定設定檔路徑
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -175,18 +176,23 @@ def parse_xml_to_articles(xml_str):
         link_elem = entry.find('ns:link', ns)
         author = entry.find('ns:author/ns:name', ns)
         content = entry.find('ns:content', ns)
+        published = entry.find('ns:published', ns)
+        if published is None:
+            published = entry.find('ns:updated', ns)
         
         title_text = title.text if title is not None else ""
         link_url = link_elem.attrib.get('href', '') if link_elem is not None else ""
         author_name = author.text if author is not None else "未知"
         content_text = content.text if content is not None else ""
+        published_text = published.text if published is not None else ""
 
         articles.append({
             'id': link_url, # 使用連結 URL 作為去重 ID
             'title': title_text,
             'link': link_url,
             'author': author_name,
-            'content': content_text
+            'content': content_text,
+            'published': published_text
         })
     return articles
 
@@ -259,6 +265,51 @@ def send_line_notification(token, user_id, articles):
         print(f"❌ LINE 推播發生未知錯誤: {e}")
         return False
 
+def calculate_feed_velocity(articles):
+    """計算並輸出 PTT 版塊發文流速統計"""
+    if len(articles) < 2:
+        return
+        
+    parsed_times = []
+    for art in articles:
+        date_str = art.get('published')
+        if not date_str:
+            continue
+        try:
+            parsed_times.append(datetime.fromisoformat(date_str))
+        except Exception:
+            try:
+                parsed_times.append(datetime.strptime(date_str.split('+')[0], "%Y-%m-%dT%H:%M:%S"))
+            except Exception:
+                pass
+                
+    if len(parsed_times) < 2:
+        return
+        
+    parsed_times.sort(reverse=True) # 從新到舊
+    newest = parsed_times[0]
+    oldest = parsed_times[-1]
+    diff = newest - oldest
+    total_minutes = diff.total_seconds() / 60
+    count = len(parsed_times)
+    avg_interval = total_minutes / (count - 1)
+    
+    # GitHub Action 預設定時定頻大約為 30 分鐘，用以評估安全性
+    cron_interval = 30 
+    
+    print("\n================== 📊 PTT Gamesale 發文流速數據 ==================")
+    print(f"🔹 目前 RSS 內包含文章數 : {count} 篇")
+    print(f"🔹 最新文章發文時間     : {newest.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🔹 最舊文章發文時間     : {oldest.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🔹 20 篇文章的時間跨度  : {total_minutes:.1f} 分鐘 ({total_minutes/60:.2f} 小時)")
+    print(f"🔹 平均發文速率         : 每一篇間隔 {avg_interval:.1f} 分鐘")
+    
+    if total_minutes > cron_interval:
+        print(f"🟢 [安全] 塞滿 20 篇需要 {total_minutes:.1f} 分鐘，高於目前排程間隔 ({cron_interval} 分鐘)，現有排程安全不會漏文。")
+    else:
+        print(f"⚠️ [警告] 塞滿 20 篇僅花費 {total_minutes:.1f} 分鐘，已低於目前排程間隔 ({cron_interval} 分鐘)，高機率漏文，建議優化排程！")
+    print("=================================================================\n")
+
 def main():
     # 支援手動命令列參數 `--mock` 強制啟用 mock
     use_mock = '--mock' in sys.argv or os.environ.get('PTT_MOCK') == '1'
@@ -276,6 +327,9 @@ def main():
     # 3. 解析與過濾文章
     all_articles = parse_xml_to_articles(xml_str)
     print(f"🔍 總共解析出 {len(all_articles)} 篇貼文")
+    
+    # 📊 計算發文流速數據
+    calculate_feed_velocity(all_articles)
     
     filtered_articles = filter_articles(all_articles, keywords)
     
